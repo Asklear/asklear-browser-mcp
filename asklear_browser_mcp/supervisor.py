@@ -47,6 +47,14 @@ class ConnectorUnavailable(RuntimeError):
         self.code = code
 
 
+def _connector_command() -> list[str]:
+    """Resolve the bundled Connector without depending on the caller's PATH."""
+    executable = shutil.which("asklear-browser-connector")
+    if executable:
+        return [executable]
+    return [sys.executable, "-m", "asklear_browser_mcp.connector"]
+
+
 def _loopback_parts(origin: str) -> tuple[str, int]:
     parsed = urlsplit(origin)
     if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
@@ -184,16 +192,9 @@ class ConnectorSupervisor:
             if not self._autostart:
                 raise ConnectorUnavailable(self._manual_hint("未检测到正在运行的 Connector"))
 
-            # 本地模式的 Connector 是纯本地执行器,自动拉起不再需要任何账号凭据——
-            # Agent 直接驱动插件采集。云端模式(ASKLEAR_BROWSER_CONNECTOR_MODE=cloud)
-            # 的凭据由子进程从继承的环境变量自取,在实际调用时给出可操作错误。
-            executable = shutil.which("asklear-browser-connector")
-            command: list[str]
-            if executable:
-                command = [executable]
-            else:
-                # 未安装 console script 时退回模块调用,保证开发环境也能用。
-                command = ["asklear-browser-connector"]  # fallback if installed via pip
+            # 本地 Connector 是纯本地执行器,自动拉起不需要账号凭据——Agent
+            # 直接通过已绑定的插件执行浏览器操作。
+            command = _connector_command()
             command += [
                 "--api-origin", self._api_origin,
                 "--host", self._host,
@@ -232,8 +233,8 @@ class ConnectorSupervisor:
                 await self._terminate_child()
                 raise ConnectorUnavailable(
                     f"Connector 已启动但 {STARTUP_TIMEOUT_SECONDS:.0f} 秒内未就绪。"
-                    f"常见原因:{API_KEY_ENV} 无效或账号缺少 browser 权限、"
-                    f"端口 {self._port} 被其他程序占用。{self._manual_hint('')}"
+                    f"请确认 Chrome 扩展已安装并完成绑定、端口 {self._port} 未被占用。"
+                    f"{self._manual_hint('')}"
                 )
             publish_process_token(
                 self._host, self._port, self._process_token, root=self._token_root
@@ -256,12 +257,9 @@ class ConnectorSupervisor:
     def _manual_hint(self, prefix: str) -> str:
         head = f"{prefix}。" if prefix else ""
         return (
-            f"{head}可手动启动(推荐先授权,之后无需任何 Key):"
-            f"asklear-browser-connector login --api-origin {self._api_origin};"
-            f"然后 asklear-browser-connector --api-origin {self._api_origin} "
-            f"--host {self._host} --port {self._port}。"
-            f"如必须用 API Key,别把它写在命令行上(会进 shell history):"
-            f"先 read -rs {API_KEY_ENV} && export {API_KEY_ENV},再运行上面的启动命令。"
+            f"{head}可直接手动启动已安装的本地 Connector:"
+            f"asklear-browser-connector --host {self._host} --port {self._port}。"
+            "它不需要 API Key、OAuth 授权或单独安装 Connector。"
         )
 
     async def _terminate_child(self) -> None:

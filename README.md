@@ -20,13 +20,13 @@ Six browser tools, usable from any MCP-compatible agent (Claude Code, Codex, Wor
 ## Install
 
 ```bash
-uv tool install asklear-browser-mcp
+uv tool install git+https://github.com/Asklear/asklear-browser-mcp.git
 ```
 
 Or, if you prefer pip:
 
 ```bash
-pip install asklear-browser-mcp
+pip install git+https://github.com/Asklear/asklear-browser-mcp.git
 ```
 
 ## Configure
@@ -65,7 +65,7 @@ asklear-browser-connector (auto-started)
 Asklear Chrome extension → your Chrome tab
 ```
 
-The local Connector is auto-started on first use and shuts down when the gateway exits. No manual process management needed.
+The local Connector is bundled in this distribution and auto-started on first use. A second Agent reuses the Connector already listening on loopback; its session is isolated by `session_id`. No separate Connector installation or manual process management is needed.
 
 ## Two connections, one Asklear
 
