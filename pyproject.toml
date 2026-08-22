@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-asklear-browser-mcp = "asklear_browser_mcp.adapter:main"
+asklear-browser-agent = "asklear_browser_mcp.adapter:main"
 asklear-browser-connector = "asklear_browser_mcp.connector:main"
 
 [tool.hatch.build.targets.wheel]

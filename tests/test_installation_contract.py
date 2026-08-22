@@ -15,9 +15,16 @@ def test_distribution_exposes_adapter_and_connector_commands() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert project["project"]["scripts"] == {
-        "asklear-browser-mcp": "asklear_browser_mcp.adapter:main",
+        "asklear-browser-agent": "asklear_browser_mcp.adapter:main",
         "asklear-browser-connector": "asklear_browser_mcp.connector:main",
     }
+
+
+def test_readme_uses_the_agent_command_without_the_removed_command() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert '"command": "asklear-browser-agent"' in readme
+    assert '"command": "asklear-browser-mcp"' not in readme
 
 
 def test_connector_module_has_a_real_cli_entrypoint() -> None:
