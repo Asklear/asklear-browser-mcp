@@ -37,7 +37,7 @@ Add this to your MCP client configuration:
 {
   "mcpServers": {
     "asklear-local": {
-      "command": "asklear-browser-mcp",
+      "command": "asklear-browser-agent",
       "args": []
     }
   }
@@ -56,7 +56,7 @@ Add this to your MCP client configuration:
 Agent (Claude Code / Codex / …)
   │ stdio JSON-RPC
   ▼
-asklear-browser-mcp (this package)
+asklear-browser-agent (this package)
   │ loopback HTTP (127.0.0.1:8765)
   ▼
 asklear-browser-connector (auto-started)
