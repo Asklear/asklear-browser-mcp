@@ -20,6 +20,12 @@ def test_distribution_exposes_adapter_and_connector_commands() -> None:
     }
 
 
+def test_distribution_declares_websocket_runtime_dependency() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert "websockets>=13" in project["project"]["dependencies"]
+
+
 def test_readme_uses_the_agent_command_without_the_removed_command() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
