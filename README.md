@@ -47,6 +47,7 @@ Add this to your MCP client configuration:
 ## Prerequisites
 
 - Google Chrome installed
+- macOS, Windows, and Linux are supported
 - [Asklear Chrome extension](https://asklear.cn) installed and bound to your account
 - Verify: `curl http://127.0.0.1:8765/health` → `{"extension_connected": true}`
 
@@ -57,15 +58,39 @@ Agent (Claude Code / Codex / …)
   │ stdio JSON-RPC
   ▼
 asklear-browser-agent (this package)
-  │ loopback HTTP (127.0.0.1:8765)
+  │ probe / call over loopback HTTP (127.0.0.1:8765)
   ▼
-asklear-browser-connector (auto-started)
+asklear-browser-connector (independent background daemon)
   │ WebSocket
   ▼
 Asklear Chrome extension → your Chrome tab
 ```
 
-The local Connector is bundled in this distribution and auto-started on first use. A second Agent reuses the Connector already listening on loopback; its session is isolated by `session_id`. No separate Connector installation or manual process management is needed.
+The first browser tool call starts the Connector in the background when it is
+not already running. A second Agent reuses the same loopback daemon; its
+session is isolated by `session_id`. When an Agent exits, the Connector stays
+running for the next Agent.
+
+The daemon keeps only local runtime state under
+`~/.asklear/browser-connector/`:
+
+- `connector.pid` — current process ID
+- `connector.log` — daemon output
+- `process-token-*` — a private local process token
+
+You normally do not need to manage it. For troubleshooting, the same package
+provides:
+
+```bash
+asklear-browser-connector start
+asklear-browser-connector status
+asklear-browser-connector stop
+asklear-browser-connector restart
+```
+
+`start` and the automatic start path do not need an API key or OAuth. The
+token is read from the private local state file and is never put in the
+command line.
 
 ## Two connections, one Asklear
 

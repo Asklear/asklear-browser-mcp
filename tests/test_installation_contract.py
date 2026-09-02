@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from pathlib import Path
 import tomllib
+from pathlib import Path
 
 from asklear_browser_mcp.supervisor import ConnectorSupervisor, _connector_command
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -60,13 +59,21 @@ def test_manual_connector_hint_matches_the_standalone_local_contract() -> None:
 
         asyncio.run(supervisor.aclose())
 
-    assert "asklear-browser-connector --host 127.0.0.1 --port 8765" in hint
+    assert "asklear-browser-connector start --host 127.0.0.1 --port 8765" in hint
     assert "login" not in hint
     assert "API_KEY" not in hint
 
 
-def test_autostart_fallback_uses_the_installed_python_module(monkeypatch) -> None:
-    monkeypatch.setattr("asklear_browser_mcp.supervisor.shutil.which", lambda _name: None)
+def test_autostart_uses_the_installed_python_module() -> None:
+    assert _connector_command() == [
+        sys.executable,
+        "-m",
+        "asklear_browser_mcp.connector",
+    ]
+
+
+def test_autostart_does_not_select_a_stale_connector_from_path(monkeypatch) -> None:
+    monkeypatch.setenv("PATH", "/old-venv/bin")
 
     assert _connector_command() == [
         sys.executable,
