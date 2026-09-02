@@ -319,7 +319,7 @@ def _wait_for_health(pid: int, host: str, port: int, *, timeout: float) -> dict[
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         health = _connector_health(host, port)
-        if health is not None:
+        if health is not None and health.get("pid") == pid:
             return health
         if not _pid_is_running(pid):
             return None

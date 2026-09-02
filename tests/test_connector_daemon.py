@@ -321,6 +321,27 @@ def test_status_does_not_claim_a_managed_connector_when_health_pid_differs(
     assert status["running"] is False
 
 
+def test_wait_for_health_rejects_health_from_another_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        supervisor_module,
+        "_connector_health",
+        lambda *_args, **_kwargs: {
+            "status": "ok",
+            "pid": 67890,
+            "capabilities": {"browser": {"execution": "local"}},
+        },
+    )
+    monkeypatch.setattr(supervisor_module, "_pid_is_running", lambda pid: False)
+
+    health = supervisor_module._wait_for_health(
+        12345, "127.0.0.1", 8765, timeout=0.2
+    )
+
+    assert health is None
+
+
 def test_concurrent_starts_share_one_connector(tmp_path: Path) -> None:
     port = _free_port()
     state_dir = tmp_path / "connector-state"
