@@ -13,24 +13,26 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from collections.abc import Mapping
-from contextlib import suppress
-from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import ipaddress
+import json
 import os
 import re
 import secrets
+import sys
+from collections.abc import Mapping
+from contextlib import suppress
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+import uvicorn
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
-import uvicorn
 
 from .constants import PROCESS_TOKEN_HEADER
-
 
 BROWSER_OPERATIONS = ("navigate", "observe", "click", "fill", "scroll", "extract")
 CONNECTOR_TOKEN_ENV = "ASKLEAR_BROWSER_CONNECTOR_TOKEN"
@@ -181,7 +183,7 @@ class _ExtensionConnection:
                 raise BrowserConnectorError("browser extension is offline", code="browser_extension_offline") from error
             try:
                 return await asyncio.wait_for(future, timeout=timeout)
-            except asyncio.TimeoutError as error:
+            except TimeoutError as error:
                 raise BrowserConnectorError(
                     "browser extension request timed out", code="browser_extension_request_timed_out"
                 ) from error
@@ -260,7 +262,7 @@ class _BrowserCore:
                 connection = self.hub.current
                 if connection is None:
                     raise BrowserConnectorError("browser extension is offline", code="browser_extension_offline")
-                deadline = datetime.now(timezone.utc) + timedelta(seconds=self.timeout_seconds)
+                deadline = datetime.now(UTC) + timedelta(seconds=self.timeout_seconds)
                 frame = {
                     "type": "command",
                     "request_id": request_id,
@@ -346,6 +348,7 @@ class BrowserConnectorApplication:
             current = self.hub.current
             return {
                 "status": "ok",
+                "pid": os.getpid(),
                 "extension_connected": current is not None,
                 "instance_id": current.instance_id if current is not None else None,
                 "capabilities": {
@@ -376,7 +379,7 @@ class BrowserConnectorApplication:
                     {"error": {"code": error.code, "message": str(error)}},
                     status_code=status,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - keep the local HTTP endpoint fail-closed
                 return JSONResponse(
                     {"error": {"code": "connector_error", "message": "browser Connector failed"}},
                     status_code=502,
@@ -418,7 +421,7 @@ class BrowserConnectorApplication:
                         "type": "authenticated",
                         "protocol_version": 1,
                         "instance_id": connection.instance_id,
-                        "server_time": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        "server_time": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                     }
                 )
                 while True:
@@ -433,7 +436,7 @@ class BrowserConnectorApplication:
                     raise BrowserConnectorError("unexpected extension frame", code="malformed_input")
             except WebSocketDisconnect:
                 pass
-            except Exception:
+            except Exception:  # noqa: BLE001 - close malformed extension sessions
                 with suppress(Exception):
                     await websocket.close(code=1002)
             finally:
@@ -444,11 +447,35 @@ class BrowserConnectorApplication:
                 )
                 await self.hub.release(connection)
 
-    def run(self) -> None:
-        from .supervisor import process_token_path, publish_process_token
+    def run(self, *, state_dir: Path | None = None) -> None:
+        from .supervisor import (
+            ConnectorUnavailable,
+            _connector_health,
+            _pid_is_running,
+            _read_pid,
+            clear_connector_pid,
+            connector_state_dir,
+            process_token_path,
+            publish_process_token,
+            validate_loopback_endpoint,
+            write_connector_pid,
+        )
 
-        published = publish_process_token(self.host, self.port, self.process_token)
+        validate_loopback_endpoint(self.host, self.port)
+        state_root = connector_state_dir(state_dir)
+        existing_pid = _read_pid(root=state_root)
+        if (
+            (existing_pid not in {None, os.getpid()} and _pid_is_running(existing_pid))
+            or _connector_health(self.host, self.port) is not None
+        ):
+            raise ConnectorUnavailable(
+                f"端口 {self.port} 上已有一个 Connector 在运行,请使用 start/status/stop 管理。"
+            )
+        write_connector_pid(os.getpid(), root=state_root)
         try:
+            publish_process_token(
+                self.host, self.port, self.process_token, root=state_root
+            )
             uvicorn.run(
                 self.app,
                 host=self.host,
@@ -457,35 +484,100 @@ class BrowserConnectorApplication:
                 access_log=False,
             )
         finally:
+            clear_connector_pid(os.getpid(), root=state_root)
             with suppress(OSError):
-                current = process_token_path(self.host, self.port).read_text(encoding="utf-8")
+                token_path = process_token_path(self.host, self.port, root=state_root)
+                current = token_path.read_text(encoding="utf-8")
                 if current.strip() == self.process_token:
-                    published.unlink(missing_ok=True)
+                    token_path.unlink(missing_ok=True)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Asklear local browser Connector")
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=("start", "run", "status", "stop", "restart"),
+        default="run",
+        help="生命周期命令(默认 run, start 会在后台运行)",
+    )
     # Kept for compatibility with the unified gateway supervisor.  Local mode
     # does not call the control plane, so the value is intentionally unused.
     parser.add_argument("--api-origin", default=STARTUP_API_ORIGIN)
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--process-token", default=os.environ.get(CONNECTOR_TOKEN_ENV, ""))
+    parser.add_argument(
+        "--process-token",
+        default=os.environ.get(CONNECTOR_TOKEN_ENV, ""),
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument("--state-dir", default=None, help="本地状态目录")
     args = parser.parse_args(argv)
-    BrowserConnectorApplication(
-        host=args.host,
-        port=args.port,
-        process_token=args.process_token or None,
-    ).run()
-    return 0
+    from .supervisor import (
+        ConnectorUnavailable,
+        restart_connector,
+        start_connector,
+        status_connector,
+        stop_connector,
+        validate_loopback_endpoint,
+    )
+
+    state_root = Path(args.state_dir) if args.state_dir else None
+    if args.command == "run":
+        try:
+            validate_loopback_endpoint(args.host, args.port)
+            token = args.process_token or os.environ.get(CONNECTOR_TOKEN_ENV, "")
+            if not token:
+                from .supervisor import read_published_process_token
+
+                token = read_published_process_token(args.host, args.port, root=state_root) or secrets.token_urlsafe(32)
+            BrowserConnectorApplication(
+                host=args.host,
+                port=args.port,
+                process_token=token,
+            ).run(state_dir=state_root)
+            return 0
+        except (ConnectorUnavailable, ValueError) as error:
+            print(str(error), file=sys.stderr)
+            return 1
+
+    try:
+        if args.command == "start":
+            health, started = start_connector(
+                host=args.host,
+                port=args.port,
+                api_origin=args.api_origin,
+                root=state_root,
+            )
+            print(json.dumps({"started": started, "health": health}, ensure_ascii=False))
+            return 0
+        if args.command == "restart":
+            health, started = restart_connector(
+                host=args.host,
+                port=args.port,
+                api_origin=args.api_origin,
+                root=state_root,
+            )
+            print(json.dumps({"started": started, "health": health}, ensure_ascii=False))
+            return 0
+        if args.command == "status":
+            status = status_connector(host=args.host, port=args.port, root=state_root)
+            print(json.dumps(status, ensure_ascii=False))
+            return 0 if status["running"] else 1
+        stopped = stop_connector(host=args.host, port=args.port, root=state_root)
+        print(json.dumps({"stopped": stopped}, ensure_ascii=False))
+        return 0
+    except (ConnectorUnavailable, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
 
 
 __all__ = [
     "ASKLEAR_EXTENSION_ID",
     "BROWSER_OPERATIONS",
+    "CONNECTOR_TOKEN_ENV",
     "BrowserConnectorApplication",
     "BrowserConnectorError",
-    "CONNECTOR_TOKEN_ENV",
     "main",
 ]
 

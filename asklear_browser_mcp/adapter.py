@@ -9,25 +9,23 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from collections.abc import Mapping
 import json
 import os
 import re
 import secrets
 import sys
-from urllib.parse import urlsplit
+from collections.abc import Mapping
 from typing import Any, TextIO
+from urllib.parse import urlsplit
 
 import httpx
 
-from .constants import PROCESS_TOKEN_HEADER
+from .constants import MAX_FILL_VALUE_BYTES, PROCESS_TOKEN_HEADER
 from .supervisor import (
     AUTOSTART_ENV,
     ConnectorSupervisor,
     ConnectorUnavailable,
 )
-from .constants import MAX_FILL_VALUE_BYTES
-
 
 CONNECTOR_TOKEN_ENV = "ASKLEAR_BROWSER_CONNECTOR_TOKEN"
 CONNECTOR_ORIGIN_ENV = "ASKLEAR_BROWSER_CONNECTOR_ORIGIN"
@@ -329,8 +327,8 @@ def main(argv: list[str] | None = None) -> int:
         if not autostart:
             # 不自启时必须由用户提供,否则无法与已在运行的 Connector 互认。
             parser.error(f"{CONNECTOR_TOKEN_ENV} is required when autostart is disabled")
-        # 自启时 adapter 与 Connector 都由本进程装配,令牌只在两者之间使用,
-        # 就地生成即可——省掉"用户自己造一个随机串"这一步。
+        # 自启时不需要用户配置令牌;这里仅给 adapter 一个临时占位值,
+        # Supervisor 会从常驻 Connector 的私有状态文件读取真正的令牌。
         process_token = secrets.token_urlsafe(32)
 
     supervisor = ConnectorSupervisor(
@@ -348,9 +346,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 __all__ = [
-    "BrowserAgentAdapter",
     "CONNECTOR_ORIGIN_ENV",
     "CONNECTOR_TOKEN_ENV",
     "DEFAULT_CONNECTOR_ORIGIN",
+    "BrowserAgentAdapter",
     "main",
 ]
