@@ -5,13 +5,22 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from asklear_browser_mcp.supervisor import ConnectorSupervisor, write_connector_pid
+from asklear_browser_mcp import supervisor as supervisor_module
+from asklear_browser_mcp.supervisor import (
+    ConnectorSupervisor,
+    start_connector,
+    stop_connector,
+    write_connector_pid,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -188,6 +197,46 @@ def test_stop_does_not_kill_a_reused_pid_without_connector_health(tmp_path: Path
         unrelated.wait(timeout=5)
 
 
+def test_stop_does_not_kill_a_pid_for_non_connector_health(tmp_path: Path) -> None:
+    state_dir = tmp_path / "connector-state"
+    class NonConnectorHealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            payload = b"{}"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), NonConnectorHealthHandler)
+    server_thread = threading.Thread(target=server.serve_forever)
+    server_thread.start()
+    unrelated = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(10)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        write_connector_pid(unrelated.pid, root=state_dir)
+        assert (
+            stop_connector(
+                host="127.0.0.1", port=server.server_port, root=state_dir
+            )
+            is False
+        )
+        assert unrelated.poll() is None
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=5)
+        unrelated.terminate()
+        unrelated.wait(timeout=5)
+
+
 def test_concurrent_starts_share_one_connector(tmp_path: Path) -> None:
     port = _free_port()
     state_dir = tmp_path / "connector-state"
@@ -208,3 +257,53 @@ def test_concurrent_starts_share_one_connector(tmp_path: Path) -> None:
     finally:
         _run_connector(state_dir, port, "stop")
         _wait_for_exit(managed_pid)
+
+
+def test_start_does_not_pass_api_credentials_to_daemon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("ASKLEAR_API_KEY", "api-key-must-not-be-inherited")
+    monkeypatch.setenv(
+        "ASKLEAR_BROWSER_API_KEY", "legacy-api-key-must-not-be-inherited"
+    )
+    monkeypatch.setenv(
+        "ASKLEAR_BROWSER_CONNECTOR_TOKEN", "connector-token-must-not-be-inherited"
+    )
+    monkeypatch.setattr(
+        supervisor_module, "_connector_health", lambda *_args, **_kwargs: None
+    )
+
+    def fake_detached_popen(command, *, log_path, env):
+        captured["command"] = command
+        captured["env"] = env
+        return SimpleNamespace(pid=999999)
+
+    monkeypatch.setattr(supervisor_module, "_detached_popen", fake_detached_popen)
+    monkeypatch.setattr(
+        supervisor_module,
+        "_wait_for_health",
+        lambda *_args, **_kwargs: {"status": "ok"},
+    )
+
+    health, started = start_connector(
+        host="127.0.0.1",
+        port=_free_port(),
+        api_origin="https://api.asklear.cn",
+        root=tmp_path / "connector-state",
+        command=("fake-connector",),
+        startup_timeout=0.2,
+    )
+
+    assert health == {"status": "ok"}
+    assert started is True
+    child_environment = captured["env"]
+    assert isinstance(child_environment, dict)
+    assert all(
+        name not in child_environment
+        for name in (
+            "ASKLEAR_API_KEY",
+            "ASKLEAR_BROWSER_API_KEY",
+            "ASKLEAR_BROWSER_CONNECTOR_TOKEN",
+        )
+    )

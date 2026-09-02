@@ -202,6 +202,16 @@ def validate_loopback_endpoint(host: str, port: int) -> None:
         raise ValueError("browser Connector port is invalid")
 
 
+def _is_connector_health(body: object) -> bool:
+    if not isinstance(body, dict) or body.get("status") != "ok":
+        return False
+    capabilities = body.get("capabilities")
+    if not isinstance(capabilities, dict):
+        return False
+    browser = capabilities.get("browser")
+    return isinstance(browser, dict) and browser.get("execution") == "local"
+
+
 def _connector_health(host: str, port: int, *, timeout: float = PROBE_TIMEOUT_SECONDS) -> dict[str, Any] | None:
     opener = build_opener(ProxyHandler({}))
     request = Request(f"http://{host}:{port}/health", method="GET")
@@ -212,7 +222,7 @@ def _connector_health(host: str, port: int, *, timeout: float = PROBE_TIMEOUT_SE
             body = json.loads(response.read(1024 * 1024).decode("utf-8"))
     except (HTTPError, OSError, URLError, TimeoutError, ValueError, UnicodeError):
         return None
-    return body if isinstance(body, dict) else None
+    return body if _is_connector_health(body) else None
 
 
 def _connector_command() -> list[str]:
@@ -349,6 +359,7 @@ def start_connector(
         # run 从私有 token 文件读取;不把 token 放入环境或命令行。
         environment.pop(CONNECTOR_TOKEN_ENV, None)
         environment.pop("ASKLEAR_API_KEY", None)
+        environment.pop(API_KEY_ENV, None)
         child_command = list(command or _connector_command()) + [
             "run",
             "--api-origin",
@@ -524,6 +535,7 @@ class ConnectorSupervisor:
             environment = dict(os.environ)
             environment.pop(CONNECTOR_TOKEN_ENV, None)
             environment.pop("ASKLEAR_API_KEY", None)
+            environment.pop(API_KEY_ENV, None)
             launcher: asyncio.subprocess.Process | None = None
             try:
                 launcher = await asyncio.create_subprocess_exec(
