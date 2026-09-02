@@ -348,6 +348,7 @@ class BrowserConnectorApplication:
             current = self.hub.current
             return {
                 "status": "ok",
+                "pid": os.getpid(),
                 "extension_connected": current is not None,
                 "instance_id": current.instance_id if current is not None else None,
                 "capabilities": {
@@ -448,6 +449,10 @@ class BrowserConnectorApplication:
 
     def run(self, *, state_dir: Path | None = None) -> None:
         from .supervisor import (
+            ConnectorUnavailable,
+            _connector_health,
+            _pid_is_running,
+            _read_pid,
             clear_connector_pid,
             connector_state_dir,
             process_token_path,
@@ -458,6 +463,14 @@ class BrowserConnectorApplication:
 
         validate_loopback_endpoint(self.host, self.port)
         state_root = connector_state_dir(state_dir)
+        existing_pid = _read_pid(root=state_root)
+        if (
+            (existing_pid not in {None, os.getpid()} and _pid_is_running(existing_pid))
+            or _connector_health(self.host, self.port) is not None
+        ):
+            raise ConnectorUnavailable(
+                f"端口 {self.port} 上已有一个 Connector 在运行,请使用 start/status/stop 管理。"
+            )
         write_connector_pid(os.getpid(), root=state_root)
         try:
             publish_process_token(
@@ -511,18 +524,22 @@ def main(argv: list[str] | None = None) -> int:
 
     state_root = Path(args.state_dir) if args.state_dir else None
     if args.command == "run":
-        validate_loopback_endpoint(args.host, args.port)
-        token = args.process_token or os.environ.get(CONNECTOR_TOKEN_ENV, "")
-        if not token:
-            from .supervisor import read_published_process_token
+        try:
+            validate_loopback_endpoint(args.host, args.port)
+            token = args.process_token or os.environ.get(CONNECTOR_TOKEN_ENV, "")
+            if not token:
+                from .supervisor import read_published_process_token
 
-            token = read_published_process_token(args.host, args.port, root=state_root) or secrets.token_urlsafe(32)
-        BrowserConnectorApplication(
-            host=args.host,
-            port=args.port,
-            process_token=token,
-        ).run(state_dir=state_root)
-        return 0
+                token = read_published_process_token(args.host, args.port, root=state_root) or secrets.token_urlsafe(32)
+            BrowserConnectorApplication(
+                host=args.host,
+                port=args.port,
+                process_token=token,
+            ).run(state_dir=state_root)
+            return 0
+        except (ConnectorUnavailable, ValueError) as error:
+            print(str(error), file=sys.stderr)
+            return 1
 
     try:
         if args.command == "start":

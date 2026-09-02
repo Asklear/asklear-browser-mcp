@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi.testclient import TestClient
@@ -18,6 +19,7 @@ def test_connector_health_is_loopback_and_process_token_protected() -> None:
         health = client.get("/health")
         assert health.status_code == 200
         assert health.json()["extension_connected"] is False
+        assert health.json()["pid"] == os.getpid()
 
         unauthorized = client.post(
             "/v1/browser/command",
@@ -63,11 +65,10 @@ def test_one_extension_connection_serves_multiple_agent_commands() -> None:
         process_token="process-token",
     )
 
-    with TestClient(connector.app) as client:
-        with client.websocket_connect(
-            "/v1/browser/ws",
-            headers={"origin": "chrome-extension://ankkcefnhidgdggjdbkefehhahgofebe"},
-        ) as extension:
+    with TestClient(connector.app) as client, client.websocket_connect(
+        "/v1/browser/ws",
+        headers={"origin": "chrome-extension://ankkcefnhidgdggjdbkefehhahgofebe"},
+    ) as extension:
             extension.send_json(
                 {
                     "type": "authenticate",

@@ -37,9 +37,31 @@ DEFAULT_CONNECTOR_HOME = Path.home() / ".asklear" / "browser-connector"
 PID_FILENAME = "connector.pid"
 LOG_FILENAME = "connector.log"
 START_LOCK_FILENAME = ".start.lock"
+START_LOCK_STALE_SECONDS = 2.0
 STARTUP_TIMEOUT_SECONDS = 20.0
 PROBE_TIMEOUT_SECONDS = 2.0
 SHUTDOWN_GRACE_SECONDS = 5.0
+_CONNECTOR_ENV_ALLOWLIST = frozenset(
+    {
+        "HOME",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "PATH",
+        "SYSTEMROOT",
+        "WINDIR",
+        "TMP",
+        "TEMP",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "PYTHONPATH",
+        "ASKLEAR_BROWSER_ALLOWED_EXTENSION_IDS",
+        "ASKLEAR_BROWSER_REQUEST_DEADLINE_SECONDS",
+        CONNECTOR_HOME_ENV,
+    }
+)
 
 
 class ConnectorUnavailable(RuntimeError):
@@ -57,8 +79,12 @@ def connector_state_dir(root: Path | None = None) -> Path:
     return Path(configured) if configured else DEFAULT_CONNECTOR_HOME
 
 
+def _canonical_loopback_host(host: str) -> str:
+    return "127.0.0.1" if host == "localhost" else host
+
+
 def process_token_path(host: str, port: int, *, root: Path | None = None) -> Path:
-    return connector_state_dir(root) / f"process-token-{host}-{port}"
+    return connector_state_dir(root) / f"process-token-{_canonical_loopback_host(host)}-{port}"
 
 
 def connector_pid_path(*, root: Path | None = None) -> Path:
@@ -205,6 +231,8 @@ def validate_loopback_endpoint(host: str, port: int) -> None:
 def _is_connector_health(body: object) -> bool:
     if not isinstance(body, dict) or body.get("status") != "ok":
         return False
+    if type(body.get("pid")) is not int or body["pid"] <= 0:
+        return False
     capabilities = body.get("capabilities")
     if not isinstance(capabilities, dict):
         return False
@@ -228,6 +256,14 @@ def _connector_health(host: str, port: int, *, timeout: float = PROBE_TIMEOUT_SE
 def _connector_command() -> list[str]:
     """Start the Connector from the same installed Python environment."""
     return [sys.executable, "-m", "asklear_browser_mcp.connector"]
+
+
+def _connector_environment() -> dict[str, str]:
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if name in _CONNECTOR_ENV_ALLOWLIST
+    }
 
 
 def _detached_popen(
@@ -307,7 +343,10 @@ def _acquire_start_lock(root: Path, *, timeout: float) -> Path:
                 owner_pid = int(owner.strip()) if owner else None
             except ValueError:
                 owner_pid = None
-            if owner_pid is not None and not _pid_is_running(owner_pid):
+            if (
+                (owner_pid is not None and not _pid_is_running(owner_pid))
+                or (owner_pid is None and _start_lock_is_stale(path))
+            ):
                 with suppress(OSError):
                     path.unlink()
                 continue
@@ -325,6 +364,14 @@ def _acquire_start_lock(root: Path, *, timeout: float) -> Path:
 def _release_start_lock(path: Path) -> None:
     with suppress(OSError):
         path.unlink()
+
+
+def _start_lock_is_stale(path: Path) -> bool:
+    try:
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return False
+    return age >= START_LOCK_STALE_SECONDS
 
 
 def start_connector(
@@ -355,11 +402,8 @@ def start_connector(
 
         token = read_published_process_token(host, port, root=state_root) or secrets.token_urlsafe(32)
         publish_process_token(host, port, token, root=state_root)
-        environment = dict(os.environ)
+        environment = _connector_environment()
         # run 从私有 token 文件读取;不把 token 放入环境或命令行。
-        environment.pop(CONNECTOR_TOKEN_ENV, None)
-        environment.pop("ASKLEAR_API_KEY", None)
-        environment.pop(API_KEY_ENV, None)
         child_command = list(command or _connector_command()) + [
             "run",
             "--api-origin",
@@ -415,22 +459,30 @@ def status_connector(*, host: str, port: int, root: Path | None = None) -> dict[
 def stop_connector(*, host: str, port: int, root: Path | None = None) -> bool:
     validate_loopback_endpoint(host, port)
     state_root = connector_state_dir(root)
-    pid = _read_pid(root=state_root)
-    if pid is None or not _pid_is_running(pid):
+    state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with suppress(OSError):
+        os.chmod(state_root, 0o700)
+    lock_path = _acquire_start_lock(state_root, timeout=STARTUP_TIMEOUT_SECONDS)
+    try:
+        pid = _read_pid(root=state_root)
+        if pid is None or not _pid_is_running(pid):
+            _clear_pid(pid, root=state_root)
+            return False
+        # A stale PID must never be enough to terminate a process.  Require the
+        # expected Connector health endpoint and matching PID before sending a
+        # signal; otherwise just discard the stale bookkeeping.
+        health = _connector_health(host, port)
+        if health is None or health.get("pid") != pid:
+            _clear_pid(pid, root=state_root)
+            return False
+        token = read_published_process_token(host, port, root=state_root)
+        _terminate_pid(pid)
         _clear_pid(pid, root=state_root)
-        return False
-    # A stale PID must never be enough to terminate a process.  Require the
-    # expected Connector health endpoint before sending a signal; otherwise
-    # just discard the stale bookkeeping and leave the unrelated process.
-    if _connector_health(host, port) is None:
-        _clear_pid(pid, root=state_root)
-        return False
-    token = read_published_process_token(host, port, root=state_root)
-    _terminate_pid(pid)
-    _clear_pid(pid, root=state_root)
-    if token:
-        _remove_published_process_token(host, port, token, root=state_root)
-    return True
+        if token:
+            _remove_published_process_token(host, port, token, root=state_root)
+        return True
+    finally:
+        _release_start_lock(lock_path)
 
 
 def restart_connector(
@@ -484,7 +536,14 @@ class ConnectorSupervisor:
             )
         except (httpx.HTTPError, RuntimeError):
             return False
-        return response.status_code != 401
+        if response.status_code != 422:
+            return False
+        try:
+            body = response.json()
+        except ValueError:
+            return False
+        error = body.get("error") if isinstance(body, dict) else None
+        return isinstance(error, dict) and error.get("code") == "malformed_input"
 
     async def probe(self) -> dict[str, Any] | None:
         try:
@@ -532,10 +591,7 @@ class ConnectorSupervisor:
             ]
             if self._token_root is not None:
                 command += ["--state-dir", str(self._token_root)]
-            environment = dict(os.environ)
-            environment.pop(CONNECTOR_TOKEN_ENV, None)
-            environment.pop("ASKLEAR_API_KEY", None)
-            environment.pop(API_KEY_ENV, None)
+            environment = _connector_environment()
             launcher: asyncio.subprocess.Process | None = None
             try:
                 launcher = await asyncio.create_subprocess_exec(

@@ -18,6 +18,8 @@ import pytest
 from asklear_browser_mcp import supervisor as supervisor_module
 from asklear_browser_mcp.supervisor import (
     ConnectorSupervisor,
+    connector_start_lock_path,
+    process_token_path,
     start_connector,
     stop_connector,
     write_connector_pid,
@@ -238,6 +240,64 @@ def test_stop_does_not_kill_a_pid_for_non_connector_health(tmp_path: Path) -> No
         unrelated.wait(timeout=5)
 
 
+def test_stop_does_not_kill_pid_when_health_belongs_to_another_process(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "connector-state"
+    unrelated = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(10)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    reported_pid = unrelated.pid + 1
+
+    class ForeignHealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            payload = json.dumps(
+                {
+                    "status": "ok",
+                    "pid": reported_pid,
+                    "extension_connected": False,
+                    "instance_id": None,
+                    "capabilities": {
+                        "browser": {
+                            "execution": "local",
+                            "operations": [],
+                            "max_active_sessions": 4,
+                        }
+                    },
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), ForeignHealthHandler)
+    server_thread = threading.Thread(target=server.serve_forever)
+    server_thread.start()
+    try:
+        write_connector_pid(unrelated.pid, root=state_dir)
+        assert (
+            stop_connector(
+                host="127.0.0.1", port=server.server_port, root=state_dir
+            )
+            is False
+        )
+        assert unrelated.poll() is None
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=5)
+        unrelated.terminate()
+        unrelated.wait(timeout=5)
+
+
 def test_concurrent_starts_share_one_connector(tmp_path: Path) -> None:
     port = _free_port()
     state_dir = tmp_path / "connector-state"
@@ -271,6 +331,8 @@ def test_start_does_not_pass_api_credentials_to_daemon(
     monkeypatch.setenv(
         "ASKLEAR_BROWSER_CONNECTOR_TOKEN", "connector-token-must-not-be-inherited"
     )
+    monkeypatch.setenv("AUTH_HEADER", "bearer-must-not-be-inherited")
+    monkeypatch.setenv("TAVILY_API_KEY", "search-key-must-not-be-inherited")
     monkeypatch.setattr(
         supervisor_module, "_connector_health", lambda *_args, **_kwargs: None
     )
@@ -306,6 +368,8 @@ def test_start_does_not_pass_api_credentials_to_daemon(
             "ASKLEAR_API_KEY",
             "ASKLEAR_BROWSER_API_KEY",
             "ASKLEAR_BROWSER_CONNECTOR_TOKEN",
+            "AUTH_HEADER",
+            "TAVILY_API_KEY",
         )
     )
 
@@ -324,3 +388,110 @@ def test_async_probe_rejects_non_connector_health() -> None:
     import asyncio
 
     assert asyncio.run(supervisor.probe()) is None
+
+
+def test_token_probe_rejects_unexpected_http_response() -> None:
+    class FakeClient:
+        async def post(self, *_args: object, **_kwargs: object) -> httpx.Response:
+            return httpx.Response(200, json={"ok": True})
+
+    supervisor = ConnectorSupervisor(
+        connector_origin="http://127.0.0.1:8765",
+        process_token="process-token",
+        client=FakeClient(),  # type: ignore[arg-type]
+    )
+
+    import asyncio
+
+    assert asyncio.run(supervisor._token_accepted()) is False
+
+
+def test_process_token_path_canonicalizes_loopback_aliases(tmp_path: Path) -> None:
+    assert process_token_path("127.0.0.1", 8765, root=tmp_path) == process_token_path(
+        "localhost", 8765, root=tmp_path
+    )
+
+
+def test_run_refuses_to_replace_existing_connector_state(tmp_path: Path) -> None:
+    port = _free_port()
+    state_dir = tmp_path / "connector-state"
+
+    started = _run_connector(state_dir, port, "start")
+    assert started.returncode == 0, started.stderr
+    pid_path = state_dir / "connector.pid"
+    token_path = process_token_path("127.0.0.1", port, root=state_dir)
+    pid = int(pid_path.read_text(encoding="utf-8"))
+    token = token_path.read_text(encoding="utf-8")
+    try:
+        duplicate = _run_connector(state_dir, port, "run")
+        assert duplicate.returncode != 0
+        assert int(pid_path.read_text(encoding="utf-8")) == pid
+        assert token_path.read_text(encoding="utf-8") == token
+        os.kill(pid, 0)
+    finally:
+        _run_connector(state_dir, port, "stop")
+        _wait_for_exit(pid)
+
+
+def test_stale_start_lock_is_reclaimed(tmp_path: Path) -> None:
+    lock_path = connector_start_lock_path(root=tmp_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text("not-a-pid", encoding="utf-8")
+    stale_time = time.time() - 10
+    os.utime(lock_path, (stale_time, stale_time))
+
+    acquired = supervisor_module._acquire_start_lock(tmp_path, timeout=0.2)
+    try:
+        assert acquired == lock_path
+    finally:
+        supervisor_module._release_start_lock(acquired)
+
+
+def test_stop_waits_for_an_in_progress_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state_dir = tmp_path / "connector-state"
+    state_dir.mkdir()
+    unrelated = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(10)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    lock_path = supervisor_module._acquire_start_lock(state_dir, timeout=1)
+    health_called = threading.Event()
+    terminate_called = threading.Event()
+    monkeypatch.setattr(
+        supervisor_module,
+        "_connector_health",
+        lambda *_args, **_kwargs: (
+            health_called.set()
+            or {
+                "status": "ok",
+                "pid": unrelated.pid,
+                "capabilities": {"browser": {"execution": "local"}},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        supervisor_module,
+        "_terminate_pid",
+        lambda *_args, **_kwargs: terminate_called.set(),
+    )
+    write_connector_pid(unrelated.pid, root=state_dir)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            result = executor.submit(
+                stop_connector,
+                host="127.0.0.1",
+                port=8765,
+                root=state_dir,
+            )
+            assert not health_called.wait(timeout=0.2)
+            assert not result.done()
+            supervisor_module._release_start_lock(lock_path)
+            assert result.result(timeout=2) is True
+            assert terminate_called.is_set()
+    finally:
+        supervisor_module._release_start_lock(lock_path)
+        if unrelated.poll() is None:
+            unrelated.terminate()
+            unrelated.wait(timeout=5)
