@@ -499,7 +499,7 @@ class ConnectorSupervisor:
             body = response.json()
         except ValueError:
             return None
-        return body if isinstance(body, dict) else None
+        return body if _is_connector_health(body) else None
 
     async def ensure_running(self) -> dict[str, Any]:
         """确保 Connector 可用:优先复用,必要时 detached 拉起。"""

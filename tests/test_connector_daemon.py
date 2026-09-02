@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from asklear_browser_mcp import supervisor as supervisor_module
@@ -307,3 +308,19 @@ def test_start_does_not_pass_api_credentials_to_daemon(
             "ASKLEAR_BROWSER_CONNECTOR_TOKEN",
         )
     )
+
+
+def test_async_probe_rejects_non_connector_health() -> None:
+    class FakeClient:
+        async def get(self, *_args: object, **_kwargs: object) -> httpx.Response:
+            return httpx.Response(200, json={"status": "ok"})
+
+    supervisor = ConnectorSupervisor(
+        connector_origin="http://127.0.0.1:8765",
+        process_token="process-token",
+        client=FakeClient(),  # type: ignore[arg-type]
+    )
+
+    import asyncio
+
+    assert asyncio.run(supervisor.probe()) is None
