@@ -21,6 +21,7 @@ from asklear_browser_mcp.supervisor import (
     connector_start_lock_path,
     process_token_path,
     start_connector,
+    status_connector,
     stop_connector,
     write_connector_pid,
 )
@@ -296,6 +297,28 @@ def test_stop_does_not_kill_pid_when_health_belongs_to_another_process(
         server_thread.join(timeout=5)
         unrelated.terminate()
         unrelated.wait(timeout=5)
+
+
+def test_status_does_not_claim_a_managed_connector_when_health_pid_differs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_dir = tmp_path / "connector-state"
+    managed_pid = 12345
+    write_connector_pid(managed_pid, root=state_dir)
+    monkeypatch.setattr(supervisor_module, "_pid_is_running", lambda pid: pid == managed_pid)
+    monkeypatch.setattr(
+        supervisor_module,
+        "_connector_health",
+        lambda *_args, **_kwargs: {
+            "status": "ok",
+            "pid": 67890,
+            "capabilities": {"browser": {"execution": "local"}},
+        },
+    )
+
+    status = status_connector(host="127.0.0.1", port=8765, root=state_dir)
+
+    assert status["running"] is False
 
 
 def test_concurrent_starts_share_one_connector(tmp_path: Path) -> None:

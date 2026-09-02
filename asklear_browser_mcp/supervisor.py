@@ -446,7 +446,8 @@ def status_connector(*, host: str, port: int, root: Path | None = None) -> dict[
     health = _connector_health(host, port)
     alive = _pid_is_running(pid)
     body: dict[str, Any] = {
-        "running": health is not None and (alive or pid is None),
+        "running": health is not None
+        and (pid is None or (alive and health.get("pid") == pid)),
         "managed": alive,
         "pid": pid if alive else None,
         "port": port,
