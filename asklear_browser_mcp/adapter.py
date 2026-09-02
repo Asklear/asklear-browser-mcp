@@ -234,26 +234,56 @@ class BrowserAgentAdapter:
                     )}],
                 },
             }
-        try:
-            response = await self._client.post(
-                f"{self.connector_origin}/v1/browser/command",
-                headers={
-                    PROCESS_TOKEN_HEADER: self.process_token,
-                    "accept": "application/json",
-                    "content-type": "application/json",
-                },
-                json={"operation": operation, **dict(payload)},
-            )
-            body = response.json()
-        except (httpx.HTTPError, ValueError) as error:
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "isError": True,
-                    "content": [{"type": "text", "text": _json_text({"code": "connector_unavailable", "message": str(error)})}],
-                },
-            }
+        request_body = {"operation": operation, **dict(payload)}
+        for attempt in range(2):
+            try:
+                response = await self._client.post(
+                    f"{self.connector_origin}/v1/browser/command",
+                    headers={
+                        PROCESS_TOKEN_HEADER: self.process_token,
+                        "accept": "application/json",
+                        "content-type": "application/json",
+                    },
+                    json=request_body,
+                )
+            except httpx.HTTPError as error:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "isError": True,
+                        "content": [{"type": "text", "text": _json_text({"code": "connector_unavailable", "message": str(error)})}],
+                    },
+                }
+
+            if response.status_code == 401:
+                self._ensured = False
+                if attempt == 0:
+                    try:
+                        await self._ensure_connector()
+                    except ConnectorUnavailable as error:
+                        return {
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "result": {
+                                "isError": True,
+                                "content": [{"type": "text", "text": _json_text({"code": error.code, "message": str(error)})}],
+                            },
+                        }
+                    continue
+
+            try:
+                body = response.json()
+            except ValueError as error:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "isError": True,
+                        "content": [{"type": "text", "text": _json_text({"code": "connector_unavailable", "message": str(error)})}],
+                    },
+                }
+            break
 
         if not response.is_success:
             error_body = body.get("error") if isinstance(body, Mapping) else body
