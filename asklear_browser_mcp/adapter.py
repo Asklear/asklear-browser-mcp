@@ -258,7 +258,7 @@ class BrowserAgentAdapter:
 
             if response.status_code == 401:
                 self._ensured = False
-                if attempt == 0:
+                if attempt == 0 and self._supervisor is not None:
                     try:
                         await self._ensure_connector()
                     except ConnectorUnavailable as error:
