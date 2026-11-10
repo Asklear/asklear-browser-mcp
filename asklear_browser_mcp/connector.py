@@ -501,6 +501,9 @@ class BrowserConnectorApplication:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(description="Asklear local browser Connector")
     parser.add_argument(
         "command",

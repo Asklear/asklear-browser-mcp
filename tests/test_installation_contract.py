@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tomllib
 import json
+import os
 import zipfile
 from pathlib import Path
 
@@ -95,6 +96,18 @@ def test_connector_module_has_a_real_cli_entrypoint() -> None:
     assert result.returncode == 0, result.stderr
     assert "--host" in result.stdout
     assert "--port" in result.stdout
+
+
+def test_connector_help_handles_a_restricted_output_encoding() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "asklear_browser_mcp.connector", "--help"],
+        cwd=ROOT,
+        env={**os.environ, "PYTHONIOENCODING": "cp1252:strict"},
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode("ascii", errors="replace")
+    assert b"--host" in result.stdout
 
 
 def test_manual_connector_hint_matches_the_standalone_local_contract() -> None:
