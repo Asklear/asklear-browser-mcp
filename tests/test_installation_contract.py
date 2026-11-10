@@ -64,6 +64,7 @@ def test_bundled_extensions_support_the_connector_protocol() -> None:
             config = json.loads(package.read("config.json"))
             worker = package.read("service-worker.js")
         assert manifest["version"] == "0.3.3"
+        assert int(manifest["minimum_chrome_version"]) >= 116
         assert config["environment"] == environment
         assert b"secure_hello" in worker
         assert b"close(1002)" not in worker

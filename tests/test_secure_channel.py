@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -29,19 +28,18 @@ def test_pairing_key_does_not_require_hard_links(tmp_path, monkeypatch):
     assert len(pairing_key(root=tmp_path)) == 64
 
 
-def test_pairing_key_waits_for_concurrent_initialization(tmp_path):
+def test_pairing_key_recovers_after_publication_failure(tmp_path, monkeypatch):
     key_path = tmp_path / "extension-pairing-key"
-    key_path.write_text("a" * 32, encoding="ascii")
-    key_path.chmod(0o600)
+    replace = os.replace
+    def fail(*args, **kwargs):
+        raise OSError("interrupted publication")
 
-    def complete_write():
-        time.sleep(0.05)
-        key_path.write_text("a" * 64, encoding="ascii")
-
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(complete_write)
-        assert pairing_key(root=tmp_path) == "a" * 64
-        future.result()
+    monkeypatch.setattr(os, "replace", fail)
+    with pytest.raises(OSError, match="interrupted publication"):
+        pairing_key(root=tmp_path)
+    assert not key_path.exists()
+    monkeypatch.setattr(os, "replace", replace)
+    assert len(pairing_key(root=tmp_path)) == 64
 
 
 def test_pairing_key_rejects_invalid_existing_data(tmp_path):

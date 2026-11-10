@@ -78,7 +78,7 @@ Add this to your MCP client configuration:
 
 ## Prerequisites
 
-- Google Chrome installed
+- Google Chrome 116 or newer installed
 - macOS, Windows, and Linux are supported
 - The Asklear Chrome extension installed and enabled in the Chrome profile used by the Agent
 - Open the extension popup to check the browser and local service connection
