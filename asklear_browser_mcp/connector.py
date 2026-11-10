@@ -391,7 +391,6 @@ class BrowserConnectorApplication:
             if (
                 self._allowed_origins is not None
                 and origin is not None
-                and origin.startswith("chrome-extension://")
                 and origin not in self._allowed_origins
             ):
                 await websocket.close(code=1008)

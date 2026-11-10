@@ -3,9 +3,34 @@ from __future__ import annotations
 import os
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from asklear_browser_mcp.connector import BrowserConnectorApplication
+
+
+@pytest.mark.parametrize(
+    "origin", ["https://untrusted.example", "http://127.0.0.1:1234", "null", "chrome-extension://other"]
+)
+def test_connector_rejects_unapproved_websocket_origins(origin: str) -> None:
+    connector = BrowserConnectorApplication(host="127.0.0.1", port=8765, process_token="process-token")
+    with TestClient(connector.app) as client:
+        with pytest.raises(WebSocketDisconnect) as error:
+            with client.websocket_connect("/v1/browser/ws", headers={"origin": origin}):
+                pass
+        assert error.value.code == 1008
+        assert client.get("/health").json()["extension_connected"] is False
+
+
+def test_connector_accepts_local_clients_without_origin() -> None:
+    connector = BrowserConnectorApplication(host="127.0.0.1", port=8765, process_token="process-token")
+    with TestClient(connector.app) as client, client.websocket_connect("/v1/browser/ws") as extension:
+        extension.send_json({
+            "type": "authenticate", "protocol_version": 1,
+            "instance_id": "inst_local", "instance_token": "local-test-token-1234",
+        })
+        assert extension.receive_json()["type"] == "authenticated"
 
 
 def test_connector_health_is_loopback_and_process_token_protected() -> None:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "asklear-browser-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "Local browser collection gateway for Asklear — stdio MCP server that drives your Chrome via the Asklear extension"
 readme = "README.md"
 license = { text = "Apache-2.0" }

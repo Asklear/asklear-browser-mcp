@@ -433,7 +433,7 @@ def start_connector(
             _remove_published_process_token(host, port, token, root=state_root)
             raise ConnectorUnavailable(
                 f"Connector 已启动但 {startup_timeout:.0f} 秒内未就绪。"
-                f"请确认 Chrome 扩展已安装并完成绑定、端口 {port} 未被占用。"
+                f"请检查 Connector 日志并确认端口 {port} 未被占用。"
             )
         return health, True
     finally:

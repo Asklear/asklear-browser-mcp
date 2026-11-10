@@ -5,6 +5,7 @@ import sys
 import tomllib
 from pathlib import Path
 
+import asklear_browser_mcp
 from asklear_browser_mcp.supervisor import ConnectorSupervisor, _connector_command
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +18,33 @@ def test_distribution_exposes_adapter_and_connector_commands() -> None:
         "asklear-browser-agent": "asklear_browser_mcp.adapter:main",
         "asklear-browser-connector": "asklear_browser_mcp.connector:main",
     }
+
+
+def test_distribution_version_matches_the_mcp_server_info() -> None:
+    import asyncio
+
+    from asklear_browser_mcp.adapter import BrowserAgentAdapter
+
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    async def initialize():
+        adapter = BrowserAgentAdapter(connector_origin="http://127.0.0.1:8765", process_token="test")
+        try:
+            return await adapter.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+        finally:
+            await adapter.close()
+
+    response = asyncio.run(initialize())
+    assert project["project"]["version"] == asklear_browser_mcp.__version__
+    assert response["result"]["serverInfo"]["version"] == asklear_browser_mcp.__version__
+
+
+def test_readme_links_the_install_guide_and_explains_local_connection() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "https://docs.asklear.cn/browser" in readme
+    assert "bound to your account" not in readme
+    assert "uv tool upgrade asklear-browser-mcp" in readme
+    assert "asklear-browser-connector restart" in readme
 
 
 def test_distribution_declares_websocket_runtime_dependency() -> None:

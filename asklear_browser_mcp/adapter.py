@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from . import __version__
 from .constants import MAX_FILL_VALUE_BYTES, PROCESS_TOKEN_HEADER
 from .supervisor import (
     AUTOSTART_ENV,
@@ -190,7 +191,7 @@ class BrowserAgentAdapter:
                 "result": {
                     "protocolVersion": "2025-06-18",
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "asklear-local-browser", "version": "0.1.1"},
+                    "serverInfo": {"name": "asklear-local-browser", "version": __version__},
                 },
             }
         if method == "tools/list":
