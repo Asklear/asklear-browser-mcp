@@ -48,11 +48,15 @@ def test_readme_links_the_install_guide_and_explains_local_connection() -> None:
     assert "uv tool upgrade asklear-browser-mcp" in readme
     assert "asklear-browser-connector restart" in readme
     assert "asklear-browser-connector pair" in readme
+    assert readme.index("asklear-browser-connector start") < readme.index("asklear-browser-connector pair")
+    assert "wait until the local service is connected" in " ".join(readme.split())
 
 
 def test_bundled_extensions_support_the_connector_protocol() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    for environment in ("test", "production", "global-test", "global-production"):
+    assert "downloads/asklear-browser-extraction-global-test.zip" not in readme
+    assert not (ROOT / "downloads/asklear-browser-extraction-global-test.zip").exists()
+    for environment in ("test", "production", "global-production"):
         relative = f"downloads/asklear-browser-extraction-{environment}.zip"
         assert f"]({relative})" in readme
         with zipfile.ZipFile(ROOT / relative) as package:

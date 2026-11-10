@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 import secrets
 import stat
-import tempfile
+import time
 from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -30,29 +30,30 @@ def pairing_key(*, root: Path | None = None) -> str:
     if os.name != "nt":
         os.chmod(base, 0o700)
     path = base / "extension-pairing-key"
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        fd = os.open(path, flags)
-    except FileNotFoundError:
-        temporary_fd, temporary_name = tempfile.mkstemp(prefix=".pairing-", dir=base)
-        try:
-            with os.fdopen(temporary_fd, "w", encoding="ascii") as temporary:
-                temporary.write(secrets.token_hex(32))
-            try:
-                os.link(temporary_name, path)
-            except FileExistsError:
-                pass
-        finally:
-            os.unlink(temporary_name)
-        fd = os.open(path, flags)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except FileExistsError:
+        pass
+    else:
+        with os.fdopen(fd, "w", encoding="ascii") as handle:
+            handle.write(secrets.token_hex(32))
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     with os.fdopen(fd, "r", encoding="ascii") as handle:
         info = os.fstat(handle.fileno())
-        if not stat.S_ISREG(info.st_mode) or (os.name != "nt" and (info.st_uid != os.getuid() or info.st_mode & 0o077)):
+        path_info = os.lstat(path)
+        if (stat.S_ISLNK(path_info.st_mode) or not os.path.samestat(info, path_info)
+                or not stat.S_ISREG(info.st_mode)
+                or (os.name != "nt" and (info.st_uid != os.getuid() or info.st_mode & 0o077))):
             raise ValueError("local pairing credentials are not private")
-        value = handle.read(65)
-    if not _HEX_32.fullmatch(value):
-        raise ValueError("local pairing credentials are invalid")
-    return value
+        deadline = time.monotonic() + 1
+        while True:
+            handle.seek(0)
+            value = handle.read(65)
+            if _HEX_32.fullmatch(value):
+                return value
+            if len(value) >= 64 or time.monotonic() >= deadline:
+                raise ValueError("local pairing credentials are invalid")
+            time.sleep(0.01)
 
 
 def _digest(key: bytes, label: str, transcript: str) -> bytes:

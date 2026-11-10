@@ -28,7 +28,6 @@ download is being updated:
 - [China production](downloads/asklear-browser-extraction-production.zip)
 - [China test](downloads/asklear-browser-extraction-test.zip)
 - [Global production](downloads/asklear-browser-extraction-global-production.zip)
-- [Global test](downloads/asklear-browser-extraction-global-test.zip)
 
 Choose the package for your environment, unzip it to a permanent folder, and load
 the folder containing `manifest.json` via Chrome's `chrome://extensions` page with
@@ -55,10 +54,12 @@ asklear-browser-connector restart
 For an installation made with pip, use `pip install --upgrade git+https://github.com/Asklear/asklear-browser-mcp.git`
 instead of `uv tool upgrade`, then restart the Connector as above.
 
+Start the local service with `asklear-browser-connector start` before pairing.
 Pair the extension once on the same computer. The user runs
 `asklear-browser-connector pair` in a local terminal, opens the extension popup,
 chooses **Connect local service**, and enters the displayed code. Keep the code
-private; an Agent must not read, repeat, log, or transmit it.
+private; an Agent must not read, repeat, log, or transmit it. In the popup, wait
+until the local service is connected before testing browser tools.
 
 ## Configure
 
