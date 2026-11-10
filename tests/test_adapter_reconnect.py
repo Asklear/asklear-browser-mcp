@@ -11,6 +11,8 @@ import websockets
 
 from asklear_browser_mcp.adapter import BrowserAgentAdapter
 from asklear_browser_mcp.connector import ASKLEAR_EXTENSION_ID
+from asklear_browser_mcp.secure_channel import pairing_key
+from browser_secure_support import AsyncSecureTestSocket
 from asklear_browser_mcp.supervisor import (
     ConnectorSupervisor,
     ConnectorUnavailable,
@@ -45,11 +47,12 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-async def _connect_extension(port: int, instance_id: str):
+async def _connect_extension(port: int, instance_id: str, state_dir: Path):
     websocket = await websockets.connect(
         f"ws://127.0.0.1:{port}/v1/browser/ws",
         origin=f"chrome-extension://{ASKLEAR_EXTENSION_ID}",
     )
+    websocket = await AsyncSecureTestSocket.connect(websocket, pairing_key(root=state_dir), instance_id)
     await websocket.send(
         json.dumps(
             {
@@ -305,7 +308,7 @@ def test_same_agent_recovers_after_real_connector_restart(tmp_path: Path) -> Non
             process_token=token_before,
             supervisor=supervisor,
         )
-        first_extension = await _connect_extension(port, "inst_restart_first")
+        first_extension = await _connect_extension(port, "inst_restart_first", state_dir)
         try:
             first_task = asyncio.create_task(
                 adapter.handle(
@@ -336,7 +339,7 @@ def test_same_agent_recovers_after_real_connector_restart(tmp_path: Path) -> Non
             root=state_dir,
         )
         token_after = read_published_process_token("127.0.0.1", port, root=state_dir)
-        second_extension = await _connect_extension(port, "inst_restart_second")
+        second_extension = await _connect_extension(port, "inst_restart_second", state_dir)
         try:
             second_task = asyncio.create_task(
                 adapter.handle(

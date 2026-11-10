@@ -19,6 +19,25 @@ Six browser tools, usable from any MCP-compatible agent (Claude Code, Codex, Wor
 
 ## Install
 
+First, follow the [illustrated Chrome extension installation guide](https://docs.asklear.cn/browser)
+using the same computer and Chrome profile as the Agent. The paired local connection
+requires extension 0.3.3 or newer. Agents helping with installation should proactively
+share the guide with the user. Matching packages are available here while the public
+download is being updated:
+
+- [China production](downloads/asklear-browser-extraction-production.zip)
+- [China test](downloads/asklear-browser-extraction-test.zip)
+- [Global production](downloads/asklear-browser-extraction-global-production.zip)
+
+Choose the package for your environment, unzip it to a permanent folder, and load
+the folder containing `manifest.json` via Chrome's `chrome://extensions` page with
+Developer mode enabled.
+
+The bundled extensions connect to `http://127.0.0.1:8765`; the Agent and
+Connector must use that same address. These packages cannot be configured for a
+different port at runtime. Editing `config.json` inside a downloaded package
+does not change its compiled Connector address.
+
 ```bash
 uv tool install git+https://github.com/Asklear/asklear-browser-mcp.git
 ```
@@ -28,6 +47,26 @@ Or, if you prefer pip:
 ```bash
 pip install git+https://github.com/Asklear/asklear-browser-mcp.git
 ```
+
+If the package is already installed with uv, upgrade it and restart the existing
+background Connector so it runs the new version:
+
+```bash
+uv tool upgrade asklear-browser-mcp
+asklear-browser-connector restart
+```
+
+For an installation made with pip, use `pip install --upgrade git+https://github.com/Asklear/asklear-browser-mcp.git`
+instead of `uv tool upgrade`, then restart the Connector as above.
+Download the current matching extension package above, replace the files in the
+unpacked extension folder, and reload it in `chrome://extensions` before pairing.
+
+Start the local service with `asklear-browser-connector start` before pairing.
+Pair the extension once on the same computer. The user runs
+`asklear-browser-connector pair` in a local terminal, opens the extension popup,
+chooses **Connect local service**, and enters the displayed code. Keep the code
+private; an Agent must not read, repeat, log, or transmit it. In the popup, wait
+until the local service is connected before testing browser tools.
 
 ## Configure
 
@@ -46,10 +85,11 @@ Add this to your MCP client configuration:
 
 ## Prerequisites
 
-- Google Chrome installed
+- Google Chrome 116 or newer installed
 - macOS, Windows, and Linux are supported
-- [Asklear Chrome extension](https://asklear.cn) installed and bound to your account
-- Verify: `curl http://127.0.0.1:8765/health` → `{"extension_connected": true}`
+- The Asklear Chrome extension installed and enabled in the Chrome profile used by the Agent
+- Open the extension popup to check the browser and local service connection
+- Verify: `curl http://127.0.0.1:8765/health` → `{"extension_connected": true}`; then use `navigate` and `extract` to verify actual page extraction
 
 ## How it works
 
@@ -77,6 +117,7 @@ The daemon keeps only local runtime state under
 - `connector.pid` — current process ID
 - `connector.log` — daemon output
 - `process-token-*` — a private local process token
+- `extension-pairing-key` — the private local pairing key
 
 You normally do not need to manage it. For troubleshooting, the same package
 provides:

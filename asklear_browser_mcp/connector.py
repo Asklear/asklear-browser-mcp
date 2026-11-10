@@ -33,6 +33,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from .constants import PROCESS_TOKEN_HEADER
+from .secure_channel import SecureChannel, accept_secure_channel
 
 BROWSER_OPERATIONS = ("navigate", "observe", "click", "fill", "scroll", "extract")
 CONNECTOR_TOKEN_ENV = "ASKLEAR_BROWSER_CONNECTOR_TOKEN"
@@ -171,6 +172,7 @@ class _ExtensionConnection:
         self.websocket = websocket
         self.instance_id = ""
         self.pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self.channel: SecureChannel | None = None
 
     async def execute(self, frame: Mapping[str, Any], *, timeout: float) -> dict[str, Any]:
         request_id = frame["request_id"]
@@ -178,7 +180,9 @@ class _ExtensionConnection:
         self.pending[request_id] = future
         try:
             try:
-                await self.websocket.send_json(dict(frame))
+                if self.channel is None:
+                    raise RuntimeError("secure channel is unavailable")
+                await self.channel.send(self.websocket, dict(frame))
             except (ConnectionError, OSError, RuntimeError, WebSocketDisconnect) as error:
                 raise BrowserConnectorError("browser extension is offline", code="browser_extension_offline") from error
             try:
@@ -322,6 +326,7 @@ class BrowserConnectorApplication:
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
         process_token: str | None = None,
+        pairing_key: str | None = None,
         request_timeout_seconds: int | None = None,
     ) -> None:
         if host not in {"127.0.0.1", "localhost"}:
@@ -331,6 +336,7 @@ class BrowserConnectorApplication:
         self.host = host
         self.port = port
         self.process_token = process_token or secrets.token_urlsafe(32)
+        self.pairing_key = pairing_key or secrets.token_hex(32)
         if not self.process_token.strip():
             raise ValueError("browser Connector process token is required")
         self.hub = _ExtensionHub()
@@ -391,7 +397,6 @@ class BrowserConnectorApplication:
             if (
                 self._allowed_origins is not None
                 and origin is not None
-                and origin.startswith("chrome-extension://")
                 and origin not in self._allowed_origins
             ):
                 await websocket.close(code=1008)
@@ -400,13 +405,16 @@ class BrowserConnectorApplication:
             connection = _ExtensionConnection(websocket)
             claimed = False
             try:
-                first = await asyncio.wait_for(websocket.receive_json(), timeout=5)
+                hello = await asyncio.wait_for(websocket.receive_json(), timeout=5)
+                connection.channel, instance = await accept_secure_channel(websocket, self.pairing_key, hello)
+                first = connection.channel.receive(await asyncio.wait_for(websocket.receive_json(), timeout=5))
                 if (
                     not isinstance(first, Mapping)
                     or first.get("type") != "authenticate"
                     or first.get("protocol_version") != 1
                     or not isinstance(first.get("instance_id"), str)
                     or not _INSTANCE_ID.fullmatch(first["instance_id"])
+                    or first["instance_id"] != instance
                     or not isinstance(first.get("instance_token"), str)
                     or len(first["instance_token"]) < 16
                 ):
@@ -416,7 +424,7 @@ class BrowserConnectorApplication:
                 connection.instance_id = first["instance_id"]
                 await self.hub.claim(connection)
                 claimed = True
-                await websocket.send_json(
+                await connection.channel.send(websocket,
                     {
                         "type": "authenticated",
                         "protocol_version": 1,
@@ -425,7 +433,7 @@ class BrowserConnectorApplication:
                     }
                 )
                 while True:
-                    frame = await websocket.receive_json()
+                    frame = connection.channel.receive(await websocket.receive_json())
                     if not isinstance(frame, Mapping):
                         raise BrowserConnectorError("extension frame is invalid", code="malformed_input")
                     if frame.get("type") == "heartbeat":
@@ -493,11 +501,14 @@ class BrowserConnectorApplication:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(description="Asklear local browser Connector")
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("start", "run", "status", "stop", "restart"),
+        choices=("start", "run", "status", "stop", "restart", "pair"),
         default="run",
         help="生命周期命令(默认 run, start 会在后台运行)",
     )
@@ -515,6 +526,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     from .supervisor import (
         ConnectorUnavailable,
+        pairing_key,
         restart_connector,
         start_connector,
         status_connector,
@@ -523,6 +535,13 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     state_root = Path(args.state_dir) if args.state_dir else None
+    if args.command == "pair":
+        try:
+            print(pairing_key(root=state_root))
+            return 0
+        except (ConnectorUnavailable, OSError, ValueError) as error:
+            print(str(error), file=sys.stderr)
+            return 1
     if args.command == "run":
         try:
             validate_loopback_endpoint(args.host, args.port)
@@ -535,6 +554,7 @@ def main(argv: list[str] | None = None) -> int:
                 host=args.host,
                 port=args.port,
                 process_token=token,
+                pairing_key=pairing_key(root=state_root),
             ).run(state_dir=state_root)
             return 0
         except (ConnectorUnavailable, ValueError) as error:

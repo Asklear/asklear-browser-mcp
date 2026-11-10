@@ -26,6 +26,8 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 import httpx
 
+from .secure_channel import pairing_key
+
 CONNECTOR_TOKEN_ENV = "ASKLEAR_BROWSER_CONNECTOR_TOKEN"
 API_KEY_ENV = "ASKLEAR_BROWSER_API_KEY"  # retained for import compatibility; local mode never reads it
 API_ORIGIN_ENV = "ASKLEAR_BROWSER_API_ORIGIN"
@@ -433,7 +435,7 @@ def start_connector(
             _remove_published_process_token(host, port, token, root=state_root)
             raise ConnectorUnavailable(
                 f"Connector 已启动但 {startup_timeout:.0f} 秒内未就绪。"
-                f"请确认 Chrome 扩展已安装并完成绑定、端口 {port} 未被占用。"
+                f"请检查 Connector 日志并确认端口 {port} 未被占用。"
             )
         return health, True
     finally:
