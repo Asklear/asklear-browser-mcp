@@ -26,6 +26,8 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 import httpx
 
+from .secure_channel import pairing_key
+
 CONNECTOR_TOKEN_ENV = "ASKLEAR_BROWSER_CONNECTOR_TOKEN"
 API_KEY_ENV = "ASKLEAR_BROWSER_API_KEY"  # retained for import compatibility; local mode never reads it
 API_ORIGIN_ENV = "ASKLEAR_BROWSER_API_ORIGIN"

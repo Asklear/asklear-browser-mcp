@@ -20,9 +20,19 @@ Six browser tools, usable from any MCP-compatible agent (Claude Code, Codex, Wor
 ## Install
 
 First, follow the [illustrated Chrome extension installation guide](https://docs.asklear.cn/browser)
-using the same computer and Chrome profile as the Agent. For the local connection
-without Dashboard pairing, install extension version 0.3.3 or newer. Agents helping
-with installation should proactively share the guide with the user.
+using the same computer and Chrome profile as the Agent. The paired local connection
+requires extension 0.3.3 or newer. Agents helping with installation should proactively
+share the guide with the user. Matching packages are available here while the public
+download is being updated:
+
+- [China production](downloads/asklear-browser-extraction-production.zip)
+- [China test](downloads/asklear-browser-extraction-test.zip)
+- [Global production](downloads/asklear-browser-extraction-global-production.zip)
+- [Global test](downloads/asklear-browser-extraction-global-test.zip)
+
+Choose the package for your environment, unzip it to a permanent folder, and load
+the folder containing `manifest.json` via Chrome's `chrome://extensions` page with
+Developer mode enabled.
 
 ```bash
 uv tool install git+https://github.com/Asklear/asklear-browser-mcp.git
@@ -44,6 +54,11 @@ asklear-browser-connector restart
 
 For an installation made with pip, use `pip install --upgrade git+https://github.com/Asklear/asklear-browser-mcp.git`
 instead of `uv tool upgrade`, then restart the Connector as above.
+
+Pair the extension once on the same computer. The user runs
+`asklear-browser-connector pair` in a local terminal, opens the extension popup,
+chooses **Connect local service**, and enters the displayed code. Keep the code
+private; an Agent must not read, repeat, log, or transmit it.
 
 ## Configure
 
@@ -94,6 +109,7 @@ The daemon keeps only local runtime state under
 - `connector.pid` — current process ID
 - `connector.log` — daemon output
 - `process-token-*` — a private local process token
+- `extension-pairing-key` — the private local pairing key
 
 You normally do not need to manage it. For troubleshooting, the same package
 provides:

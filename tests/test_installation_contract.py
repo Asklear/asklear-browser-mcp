@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 import sys
 import tomllib
+import json
+import zipfile
 from pathlib import Path
 
 import asklear_browser_mcp
@@ -45,6 +47,22 @@ def test_readme_links_the_install_guide_and_explains_local_connection() -> None:
     assert "bound to your account" not in readme
     assert "uv tool upgrade asklear-browser-mcp" in readme
     assert "asklear-browser-connector restart" in readme
+    assert "asklear-browser-connector pair" in readme
+
+
+def test_bundled_extensions_support_the_connector_protocol() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for environment in ("test", "production", "global-test", "global-production"):
+        relative = f"downloads/asklear-browser-extraction-{environment}.zip"
+        assert f"]({relative})" in readme
+        with zipfile.ZipFile(ROOT / relative) as package:
+            manifest = json.loads(package.read("manifest.json"))
+            config = json.loads(package.read("config.json"))
+            worker = package.read("service-worker.js")
+        assert manifest["version"] == "0.3.3"
+        assert config["environment"] == environment
+        assert b"secure_hello" in worker
+        assert b"close(1002)" not in worker
 
 
 def test_distribution_declares_websocket_runtime_dependency() -> None:
