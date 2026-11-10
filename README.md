@@ -33,6 +33,12 @@ Choose the package for your environment, unzip it to a permanent folder, and loa
 the folder containing `manifest.json` via Chrome's `chrome://extensions` page with
 Developer mode enabled.
 
+The bundled extensions connect to `http://127.0.0.1:8765`; the Agent and
+Connector must use that same address. For a different loopback port, build the
+matching extension source with `--connector-origin` set to that address and
+configure the Agent's `--connector-origin` accordingly. Editing `config.json`
+inside a downloaded package does not change its compiled Connector address.
+
 ```bash
 uv tool install git+https://github.com/Asklear/asklear-browser-mcp.git
 ```
