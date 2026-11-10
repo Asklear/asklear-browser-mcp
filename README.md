@@ -53,6 +53,8 @@ asklear-browser-connector restart
 
 For an installation made with pip, use `pip install --upgrade git+https://github.com/Asklear/asklear-browser-mcp.git`
 instead of `uv tool upgrade`, then restart the Connector as above.
+Download the current matching extension package above, replace the files in the
+unpacked extension folder, and reload it in `chrome://extensions` before pairing.
 
 Start the local service with `asklear-browser-connector start` before pairing.
 Pair the extension once on the same computer. The user runs

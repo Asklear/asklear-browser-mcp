@@ -40,19 +40,57 @@ def pairing_key(*, root: Path | None = None) -> str:
         except FileNotFoundError:
             temporary_fd, temporary_name = tempfile.mkstemp(prefix=".pairing-", dir=base)
             try:
-                with os.fdopen(temporary_fd, "w", encoding="ascii") as handle:
-                    handle.write(secrets.token_hex(32))
+                with os.fdopen(temporary_fd, "wb") as handle:
+                    value = secrets.token_hex(32).encode("ascii")
+                    handle.write(_windows_credential(value, decrypt=False) if os.name == "nt" else value)
                 os.replace(temporary_name, path)
             finally:
                 if os.path.exists(temporary_name):
                     os.unlink(temporary_name)
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        with os.fdopen(fd, "r", encoding="ascii") as handle:
+        with os.fdopen(fd, "rb") as handle:
             _require_private_file(handle.fileno(), path)
-            value = handle.read(65)
+            data = handle.read(4097 if os.name == "nt" else 65)
+        if os.name == "nt":
+            if len(data) > 4096:
+                raise ValueError("local pairing credentials are invalid")
+            data = _windows_credential(data, decrypt=True)
+        try:
+            value = data.decode("ascii")
+        except UnicodeDecodeError as error:
+            raise ValueError("local pairing credentials are invalid") from error
         if not _HEX_32.fullmatch(value):
             raise ValueError("local pairing credentials are invalid")
         return value
+
+
+def _windows_credential(data: bytes, *, decrypt: bool) -> bytes:
+    import ctypes
+    from ctypes import wintypes
+
+    class Blob(ctypes.Structure):
+        _fields_ = [("size", wintypes.DWORD), ("data", ctypes.POINTER(ctypes.c_ubyte))]
+
+    buffer = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
+    source = Blob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)))
+    result = Blob()
+    crypt = ctypes.WinDLL("crypt32", use_last_error=True)
+    operation = crypt.CryptUnprotectData if decrypt else crypt.CryptProtectData
+    operation.argtypes = [
+        ctypes.POINTER(Blob), ctypes.c_void_p, ctypes.POINTER(Blob),
+        ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(Blob),
+    ]
+    operation.restype = wintypes.BOOL
+    if not operation(ctypes.byref(source), None, None, None, None, 1, ctypes.byref(result)):
+        message = "local pairing credentials are invalid" if decrypt else "local pairing credentials could not be protected"
+        raise ValueError(message) from ctypes.WinError(ctypes.get_last_error())
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel.LocalFree.restype = ctypes.c_void_p
+    try:
+        return ctypes.string_at(result.data, result.size)
+    finally:
+        kernel.LocalFree(ctypes.cast(result.data, ctypes.c_void_p))
 
 
 def _require_private_file(fd: int, path: Path) -> None:

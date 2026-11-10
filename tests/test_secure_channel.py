@@ -51,6 +51,13 @@ def test_pairing_key_rejects_invalid_existing_data(tmp_path):
     assert key_path.read_text(encoding="ascii") == "invalid"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows DPAPI protection")
+def test_windows_pairing_key_is_encrypted_at_rest(tmp_path):
+    key = pairing_key(root=tmp_path)
+    assert key.encode("ascii") not in (tmp_path / "extension-pairing-key").read_bytes()
+    assert pairing_key(root=tmp_path) == key
+
+
 def test_pairing_key_normalizes_the_configured_state_directory(tmp_path, monkeypatch):
     monkeypatch.setenv("ASKLEAR_BROWSER_CONNECTOR_HOME", f"  {tmp_path}  ")
     assert pairing_key() == pairing_key(root=tmp_path)
